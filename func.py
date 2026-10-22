@@ -1,0 +1,608 @@
+import fitz
+from pymupdf import TEXT_ALIGN_RIGHT
+import subprocess
+import os
+import re
+import string
+from pathlib import Path
+import random
+from datetime import datetime, timedelta
+from typing import Optional
+
+
+random_operations = ["Оплата в OZON", "Оплата в Rostics Moskva\nRUS", "Оплата в Wildberries",
+                     "Оплата в MOSKVA-31-1-\nDODOPIZZA MOSCOW RUS", "Оплата в PYATEROCHKA\n12858 MOSCOW RUS",
+                     "Оплата в Додо Пицца,\nМосква 117-2", "Оплата в YandexGo Moskva\nRUS", "Оплата в AV .AZBUKAVKUSA\nMOSCOW RUS", "Оплата в QSR 24219\nMoskva RUS", "Оплата в Russian Railways\nMoscow RUS",]
+
+import subprocess
+from pathlib import Path
+import sys
+
+def compress_pdf_ghostscript(
+    input_path: str,
+    output_path: str,
+    quality: str = 'ebook',
+    res: int = 220
+) -> bool:
+    if not Path(input_path).exists():
+        raise FileNotFoundError(f"Input file {input_path} not found")
+
+    gs_paths = [
+        "/usr/bin/gs",
+        "gs",
+        "gswin64c.exe",
+        "C:\\Program Files\\gs\\gs10.00.0\\bin\\bin\\gswin64c.exe",
+        "C:\\Program Files (x86)\\gs\\gs10.00.0\\bin\\bin\\bgswin64c.exe"
+    ]
+
+    gs_bin = None
+    for path in gs_paths:
+        try:
+            subprocess.run(
+                [path, "--version"],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE
+            )
+            gs_bin = path
+            break
+        except (subprocess.SubprocessError, FileNotFoundError):
+            continue
+
+    if not gs_bin:
+        raise FileNotFoundError(
+            "Ghostscript not found. Install it: https://www.ghostscript.com/"
+        )
+
+    command = [
+        gs_bin,
+        "-sDEVICE=pdfwrite",
+        "-dCompatibilityLevel=1.4",
+        f"-dPDFSETTINGS=/{quality}",
+        "-dSubsetFonts=true",
+        "-dColorImageDownsampleType=/Bicubic",
+        f"-dColorImageResolution={res}",
+        "-dGrayImageResolution=200",
+        "-dMonoImageResolution=400",
+        "-dDownsampleColorImages=true",
+        "-dDownsampleGrayImages=true",
+        "-dDownsampleMonoImages=true",
+        "-dColorConversionStrategy=/LeaveColorUnchanged",
+        "-dAutoFilterColorImages=false",
+        "-dAutoFilterGrayImages=false",
+        "-dNOPAUSE",
+        "-dQUIET",
+        "-dBATCH",
+        f"-sOutputFile={output_path}",
+        input_path
+    ]
+
+    kwargs = {
+        "check": True,
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.PIPE
+    }
+
+    if sys.platform == "win32":
+        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+
+    try:
+        subprocess.run(command, **kwargs)
+        return True
+    except subprocess.CalledProcessError as e:
+        error_msg = e.stderr.decode('utf-8', errors='ignore') if e.stderr else str(e)
+        raise RuntimeError(f"Ghostscript error: {error_msg}")
+
+
+
+def sber(
+        data: str,
+        card: str,
+        name: str,
+        sender_name: str,
+        time: str,
+        summ: str,
+        summ_rub: str,
+        output_pdf: str = "result.pdf"
+):
+
+
+    TEMPLATE_PATH = "tbanksend.pdf"
+    FONT_NORMAL = "1.ttf"
+    FONT_BOLD = "2.ttf"
+
+    POSITIONS = {
+        "date": (193, 90.48),
+        "card": (222.75, 159.8),
+        "name": (72, 171.33),
+        "sender": (72, 232.32),
+        "time": (72, 282.33),
+        "summ": (72, 332.34),
+        "summ_rub": (312, 332.34)
+    }
+
+    doc = fitz.open(TEMPLATE_PATH)
+    page = doc[0]
+
+    def load_font(font_path, alias):
+        if os.path.exists(font_path):
+            page.insert_font(fontname=alias, fontfile=font_path)
+            return alias
+        return "helv"
+
+    font_n = load_font(FONT_NORMAL, "my_normal")
+    font_b = load_font(FONT_BOLD, "my_bold")
+
+
+    page.insert_text(POSITIONS["date"], data, fontname=font_b, fontsize=8, color=(0, 0, 0))
+    page.insert_text(POSITIONS["card"], card, fontname=font_n, fontsize=10, color=(0, 0, 0))
+    page.insert_text(POSITIONS["name"], name, fontname=font_n, fontsize=10, color=(0, 0, 0))
+    page.insert_text(POSITIONS["sender"], sender_name, fontname=font_b, fontsize=10, color=(0, 0, 0))
+    page.insert_text(POSITIONS["time"], f"{data} в {time}", fontname=font_b, fontsize=10, color=(0, 0, 0))
+    page.insert_text(POSITIONS["summ"], f"{summ} ₽", fontname=font_b, fontsize=10, color=(0, 0, 0))
+    page.insert_text(POSITIONS["summ_rub"], f"{summ} ₽", fontname=font_b, fontsize=10, color=(0, 0, 0))
+    doc.save(
+        output_pdf,
+        clean=True,
+        deflate=True,
+        garbage=4,
+        pretty=False
+    )
+    doc.close()
+    
+
+
+async def t2t_tbank(data, summ, sender_name, card, name, id):
+    output_pdf = f"preresult_{id}.pdf"
+    """Заполняет шаблон Tinkoff PDF"""
+    TEMPLATE_PATH = "finaltbanksend.pdf"
+    FONT_NORMAL = "TinkoffSans-Regular.ttf"
+    FONT_BOLD = "TinkoffSans-Medium.ttf"
+
+    POSITIONS = {
+        "date": (20, 86.5),
+        "summ": (0, 173.98, 242.05, 187.98),
+        "big_summ": (0, 92, 234.6, 142),
+        "sender": (0, 194, 250, 219),
+        "card": (0, 214, 250, 228.18),
+        "name": (0, 234, 250.02, 248.08),
+    }
+
+    doc = fitz.open(TEMPLATE_PATH)
+    page = doc[0]
+
+    def load_font(font_path, alias):
+        if os.path.exists(font_path):
+            page.insert_font(fontname=alias, fontfile=font_path)
+            return alias
+        return "helv"
+    card = '*'+card
+    print(card)
+    font_n = load_font(FONT_NORMAL, "my_normal")
+    font_b = load_font(FONT_BOLD, "my_bold")
+    page.insert_text(POSITIONS["date"], data, fontname=font_n, fontsize=8, color=(144/255, 144/255, 144/255))
+    page.insert_textbox(POSITIONS["big_summ"], summ, fontname=font_b, fontsize=16, color=(51/255, 51/255, 51/255), align=TEXT_ALIGN_RIGHT)
+    page.insert_textbox(POSITIONS["summ"], summ, fontname=font_n, fontsize=9, color=(51/255, 51/255, 51/255), align=TEXT_ALIGN_RIGHT)
+    page.insert_textbox(POSITIONS["card"], card, fontname=font_n, fontsize=9, color=(51/255, 51/255, 51/255),align=TEXT_ALIGN_RIGHT)
+    page.insert_textbox(POSITIONS["sender"], sender_name, fontname=font_n, fontsize=9, color=(51/255, 51/255, 51/255), align=TEXT_ALIGN_RIGHT)
+    page.insert_textbox(POSITIONS["name"], name, fontname=font_n, fontsize=9, color=(51/255, 51/255, 51/255), align=TEXT_ALIGN_RIGHT)
+    doc.save(output_pdf, clean=True, deflate=True, garbage=4, pretty=False)
+    doc.close()
+    compress_pdf_ghostscript(f"preresult_{id}.pdf", f"result_{id}.pdf")
+
+async def t2t_number(data, summ, sender_name, number, name, id):
+    output_pdf = f"preresult_{id}.pdf"
+    """Заполняет шаблон Tinkoff PDF"""
+    TEMPLATE_PATH = "finalt2t_number.pdf"
+    FONT_NORMAL = "TinkoffSans-Regular.ttf"
+    FONT_BOLD = "TinkoffSans-Medium.ttf"
+
+    POSITIONS = {
+        "date": (20, 86.5),
+        "summ": (0, 173.98, 242.05, 187.98),
+        "big_summ": (0, 92, 234.6, 142),
+        "sender": (0, 194+20, 250, 219+20),
+        "number": (0, 214+20, 250, 228.18+20),
+        "name": (0, 234+20, 250.02, 248.08+20),
+    }
+
+    doc = fitz.open(TEMPLATE_PATH)
+    page = doc[0]
+
+    def load_font(font_path, alias):
+        if os.path.exists(font_path):
+            page.insert_font(fontname=alias, fontfile=font_path)
+            return alias
+        return "helv"
+    font_n = load_font(FONT_NORMAL, "my_normal")
+    font_b = load_font(FONT_BOLD, "my_bold")
+    page.insert_text(POSITIONS["date"], data, fontname=font_n, fontsize=8, color=(144/255, 144/255, 144/255))
+    page.insert_textbox(POSITIONS["big_summ"], summ, fontname=font_b, fontsize=16, color=(51/255, 51/255, 51/255), align=TEXT_ALIGN_RIGHT)
+    page.insert_textbox(POSITIONS["summ"], summ, fontname=font_n, fontsize=9, color=(51/255, 51/255, 51/255), align=TEXT_ALIGN_RIGHT)
+    page.insert_textbox(POSITIONS["number"], number, fontname=font_n, fontsize=9, color=(51/255, 51/255, 51/255),align=TEXT_ALIGN_RIGHT)
+    page.insert_textbox(POSITIONS["sender"], sender_name, fontname=font_n, fontsize=9, color=(51/255, 51/255, 51/255), align=TEXT_ALIGN_RIGHT)
+    page.insert_textbox(POSITIONS["name"], name, fontname=font_n, fontsize=9, color=(51/255, 51/255, 51/255), align=TEXT_ALIGN_RIGHT)
+    doc.save(output_pdf, clean=True, deflate=True, garbage=4, pretty=False)
+    doc.close()
+    compress_pdf_ghostscript(f"preresult_{id}.pdf", f"result_{id}.pdf")
+
+async def tcard(data, summ, sender_name, number, id):
+    output_pdf = f"preresult_{id}.pdf"
+    """Заполняет шаблон Tinkoff PDF"""
+    TEMPLATE_PATH = "ткард.pdf"
+    FONT_NORMAL = "TinkoffSans-Regular.ttf"
+    FONT_BOLD = "TinkoffSans-Medium.ttf"
+
+    POSITIONS = {
+        "date": (20, 86.5),
+        "summ": (0, 173.98, 242.05, 187.98),
+        "big_summ": (0, 92, 234.6, 142),
+        "sender": (0, 194, 250, 219),
+        "number": (0, 234-20, 250.02, 248.08-20),
+        "kvit": (98.03900146484375, 343.9582214355469+7.18),
+    }
+
+    doc = fitz.open(TEMPLATE_PATH)
+    page = doc[0]
+
+    def load_font(font_path, alias):
+        if os.path.exists(font_path):
+            page.insert_font(fontname=alias, fontfile=font_path)
+            return alias
+        return "helv"
+    font_n = load_font(FONT_NORMAL, "my_normal")
+    font_b = load_font(FONT_BOLD, "my_bold")
+    page.insert_text(POSITIONS["date"], data, fontname=font_n, fontsize=8, color=(144/255, 144/255, 144/255))
+    page.insert_textbox(POSITIONS["big_summ"], summ, fontname=font_b, fontsize=16, color=(51/255, 51/255, 51/255), align=TEXT_ALIGN_RIGHT)
+    page.insert_textbox(POSITIONS["summ"], summ, fontname=font_n, fontsize=9, color=(51/255, 51/255, 51/255), align=TEXT_ALIGN_RIGHT)
+    page.insert_textbox(POSITIONS["number"], number, fontname=font_n, fontsize=9, color=(51/255, 51/255, 51/255),align=TEXT_ALIGN_RIGHT)
+    page.insert_textbox(POSITIONS["sender"], sender_name, fontname=font_n, fontsize=9, color=(51/255, 51/255, 51/255), align=TEXT_ALIGN_RIGHT)
+    page.insert_text(POSITIONS["kvit"], f"{random.randint(111, 999)}" + "-" + f"{random.randint(111, 999)}" + "-" + f"{random.randint(111, 999)}", fontname=font_n, fontsize=9, color=(51/255, 51/255, 51/255))
+    doc.save(output_pdf, clean=True, deflate=True, garbage=4, pretty=False)
+    doc.close()
+    compress_pdf_ghostscript(f"preresult_{id}.pdf", f"result_{id}.pdf")
+
+async def tbanksbp(data, summ, sender_name, number, name, bank, id):
+    output_pdf = f"preresult_{id}.pdf"
+    """Заполняет шаблон Tinkoff PDF"""
+    TEMPLATE_PATH = "sbpfinaltbanksend.pdf"
+    FONT_NORMAL = "TinkoffSans-Regular.ttf"
+    FONT_BOLD = "TinkoffSans-Medium.ttf"
+
+    POSITIONS = {
+        "date": (20, 86.5),
+        "summ": (110, 173.98, 242.05, 187.98),
+        "big_summ": (110, 92, 234.6, 142),
+        "sender": (110, 214, 250, 228.18),
+        "number": (110, 239-5, 250.02, 253.08-5),
+        "name": (110, 239+20-5, 250.02, 253.08+20-5),
+        "bank": (110, 239+40-5, 250.02, 253.08+40-5),
+        "invoice": (110, 239+60-5, 250.02, 253.08+60-5),
+        "identificator": (124.98999786376953, 314.00299072265625+8.18),
+        "identificator2": (226.91000366210938, 325.0829772949219 + 8.18),
+        "kvit": (93.35900115966797, 450.9629821777344 + 8.18),
+    }
+
+    doc = fitz.open(TEMPLATE_PATH)
+    page = doc[0]
+
+    def load_font(font_path, alias):
+        if os.path.exists(font_path):
+            page.insert_font(fontname=alias, fontfile=font_path)
+            return alias
+        return "helv"
+
+    font_n = load_font(FONT_NORMAL, "my_normal")
+    font_b = load_font(FONT_BOLD, "my_bold")
+
+    page.insert_text(POSITIONS["date"], data, fontname=font_n, fontsize=8, color=(144/255, 144/255, 144/255))
+    page.insert_textbox(POSITIONS["big_summ"], summ, fontname=font_b, fontsize=16, color=(51/255, 51/255, 51/255), align=TEXT_ALIGN_RIGHT)
+    page.insert_textbox(POSITIONS["summ"], summ, fontname=font_n, fontsize=9, color=(51/255, 51/255, 51/255), align=TEXT_ALIGN_RIGHT)
+    page.insert_textbox(POSITIONS["sender"], sender_name, fontname=font_n, fontsize=9, color=(51/255, 51/255, 51/255), align=TEXT_ALIGN_RIGHT)
+    page.insert_textbox(POSITIONS["number"], number, fontname=font_n, fontsize=9, color=(51/255, 51/255, 51/255), align=TEXT_ALIGN_RIGHT)
+    page.insert_textbox(POSITIONS["name"], name, fontname=font_n, fontsize=9, color=(51/255, 51/255, 51/255), align=TEXT_ALIGN_RIGHT)
+
+    page.insert_textbox(POSITIONS["bank"], bank, fontname=font_n, fontsize=9, color=(51/255, 51/255, 51/255), align=TEXT_ALIGN_RIGHT)
+    page.insert_textbox(POSITIONS["invoice"], f"40817810" + f"{random.randint(0, 9)}" + "000" + "****"+f"{random.randint(1111, 9999)}", fontname=font_n, fontsize=9, color=(51/255, 51/255, 51/255), align=TEXT_ALIGN_RIGHT)
+    bukva = random.choice(["А", "В"])
+    page.insert_text(POSITIONS["identificator"], bukva + f"{random.randint(111111111111, 999999999999)}" + "406000004001"+f"{random.randint(11, 99)}", fontname=font_n, fontsize=9.008945, color=(51/255, 51/255, 51/255))
+    page.insert_text(POSITIONS["identificator2"], f"{random.randint(11111, 99999)}", fontname=font_n, fontsize=9.008945, color=(51/255, 51/255, 51/255))
+    page.insert_text(POSITIONS["kvit"], f"{random.randint(111, 999)}" + "-" + f"{random.randint(111, 999)}" + "-" + f"{random.randint(111, 999)}", fontname=font_n, fontsize=9.008945, color=(51/255, 51/255, 51/255))
+
+    doc.save(output_pdf, clean=True, deflate=True, garbage=4, pretty=False)
+    doc.close()
+    compress_pdf_ghostscript(f"preresult_{id}.pdf", f"result_{id}.pdf")
+
+
+def format_phone_for_receipt(phone: str) -> str:
+    """В квитанции: +7 (900) 331-65-81 (скобки у кода)."""
+    digits = re.sub(r"\D", "", phone or "")
+    if len(digits) == 11 and digits.startswith("8"):
+        digits = "7" + digits[1:]
+    if len(digits) == 10:
+        digits = "7" + digits
+    if len(digits) == 11 and digits.startswith("7"):
+        return f"+7 ({digits[1:4]}) {digits[4:7]}-{digits[7:9]}-{digits[9:11]}"
+    p = (phone or "").strip()
+    return p if p else ""
+
+
+def format_receipt_recipient_title(title: str) -> str:
+    """Получатель в чеке — как в карточке, с точкой после инициала («Максим У.»)."""
+    t = (title or "").strip()
+    if not t:
+        return "Получатель"
+    if re.match(r"^[\w\u0400-\u04FF\-]+\s[\w\u0400-\u04FF]\.?$", t) and not t.endswith("."):
+        return t + "."
+    return t
+
+
+def format_receipt_sender_full(name_cfg: dict, op_data: dict, op_type: str) -> str:
+    """Отправитель в чеке: «Имя Фамилия» без сокращений."""
+    cfg = name_cfg or {}
+    if op_type == "Credit":
+        raw = (
+            (op_data.get("requisite_sender_name") or op_data.get("sender_name") or "")
+            .strip()
+        )
+        if raw and not re.match(r"^[\w\u0400-\u04FF\-]+\s[\w\u0400-\u04FF]\.?$", raw):
+            return raw
+    fn = (cfg.get("first_name") or "").strip()
+    ln = (cfg.get("last_name") or "").strip()
+    if fn and ln:
+        return f"{fn} {ln}"
+    full = (cfg.get("full_name") or "").strip()
+    if full:
+        return full
+    return "Клиент"
+
+
+def _receipt_datetime_str(op_data: dict) -> str:
+    """Время квитанции = operationTime / date из панели (MSK), как в карточке."""
+    ms = None
+    ot = op_data.get("operationTime")
+    if isinstance(ot, dict):
+        try:
+            v = int(ot.get("milliseconds") or 0)
+            if v > 0:
+                ms = v
+        except (TypeError, ValueError):
+            pass
+    if ms is None:
+        try:
+            from history import parse_bank_date_str_to_ms, date_str_to_millis
+
+            ms = parse_bank_date_str_to_ms(op_data.get("date") or "")
+            if ms is None:
+                ms = date_str_to_millis(op_data.get("date") or "")
+        except Exception:
+            ms = None
+    if ms is not None and ms > 0:
+        try:
+            from history import moscow_from_timestamp
+
+            return moscow_from_timestamp(ms / 1000).strftime("%d.%m.%Y %H:%M:%S")
+        except Exception:
+            pass
+    date_str = (op_data.get("date") or "").strip()
+    if date_str:
+        date_str = date_str.replace(",", "").strip()
+        if re.search(r"\d{2}\.\d{2}\.\d{4}\s+\d{2}:\d{2}(:\d{2})?", date_str):
+            return date_str
+    try:
+        from history import now_moscow
+
+        return now_moscow().strftime("%d.%m.%Y %H:%M:%S")
+    except Exception:
+        return datetime.now().strftime("%d.%m.%Y %H:%M:%S")
+
+
+def format_receipt_sender_short(sender_raw: str, name_cfg: dict) -> str:
+    """Имя и первая буква фамилии: «Ирина К.». Три слова: фамилия имя отчество."""
+    raw = (sender_raw or "").strip()
+    parts = raw.split()
+    if len(parts) == 2 and len(parts[1]) <= 2 and parts[1].endswith("."):
+        return raw
+    if len(parts) >= 3:
+        last, first = parts[0], parts[1]
+        if last and first:
+            return f"{first} {last[0]}."
+    if len(parts) == 2:
+        last, first = parts[0], parts[1]
+        return f"{first} {last[0]}."
+    if len(parts) == 1 and parts[0]:
+        return parts[0]
+    cfg = name_cfg or {}
+    fn = (cfg.get("first_name") or "").strip()
+    ln = (cfg.get("last_name") or "").strip()
+    if fn and ln:
+        return f"{fn} {ln[0]}."
+    full = (cfg.get("full_name") or "").strip()
+    if full:
+        return format_receipt_sender_short(full, {})
+    return "Клиент"
+
+
+def format_receipt_debit_account_line(account_raw: str) -> str:
+    """Счёт списания: 4081 + ровно 8 цифр + **** + последние 4 (как на квитанции СБП)."""
+    digits = re.sub(r"\D", "", account_raw or "")
+    if digits.startswith("4081") and len(digits) >= 12:
+        eight = digits[4:12]
+    elif len(digits) >= 12:
+        eight = digits[4:12]
+    elif len(digits) > 4:
+        eight = (digits[4:] + "00000000")[:8]
+    else:
+        eight = "".join(str(random.randint(0, 9)) for _ in range(8))
+    prefix12 = "4081" + eight[:8]
+    last4 = digits[-4:] if len(digits) >= 4 else f"{random.randint(1000, 9999):04d}"
+    return prefix12 + "****" + last4
+
+
+def _resolve_receipt_template_path() -> Optional[str]:
+    """Ищет sbpfinaltbanksend.pdf рядом со скриптом или fallback на существующий receipt_*.pdf."""
+    base = Path(__file__).resolve().parent
+    primary = base / "sbpfinaltbanksend.pdf"
+    if primary.is_file():
+        return str(primary)
+    cwd_primary = Path("sbpfinaltbanksend.pdf")
+    if cwd_primary.is_file():
+        return str(cwd_primary.resolve())
+    candidates = sorted(base.glob("receipt_UNIFIED_*.pdf"), key=lambda p: p.stat().st_mtime, reverse=True)
+    if not candidates:
+        candidates = sorted(base.glob("receipt_m_*.pdf"), key=lambda p: p.stat().st_mtime, reverse=True)
+    if not candidates:
+        candidates = sorted(base.glob("receipt_*.pdf"), key=lambda p: p.stat().st_mtime, reverse=True)
+    for p in candidates:
+        if p.is_file() and p.stat().st_size > 1000:
+            return str(p)
+    return None
+
+
+def generate_operation_receipt(op_data, output_path=None):
+    """
+    Генерирует PDF-чек для ручной операции.
+    op_data: dict с полями: date, amount, type, bank, title, sender_name, receiver_phone, etc.
+    Возвращает путь к PDF или None, если шаблон недоступен / ошибка генерации.
+    """
+    import controller
+
+    try:
+        return _generate_operation_receipt_impl(op_data, output_path)
+    except Exception as e:
+        print(f"[func] generate_operation_receipt: {e}")
+        return None
+
+
+def _generate_operation_receipt_impl(op_data, output_path=None):
+    import controller
+    
+    if output_path is None:
+        op_id = op_data.get("id", "unknown")[:12]
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_path = str(Path(__file__).resolve().parent / f"receipt_{op_id}_{timestamp}.pdf")
+    
+    # Конфигурация
+    config = controller.config
+    nm = config.get("name") or {}
+    sender_account = config.get("reki", {}).get("account", "40817810000112345678")
+
+    op_type = (op_data.get("type") or "Debit").strip()
+    display_sender = format_receipt_sender_full(nm, op_data, op_type)
+    date_str = _receipt_datetime_str(op_data)
+    amount = abs(float(op_data.get("amount") or 0))
+    bank = op_data.get("bank") or op_data.get("title") or "Перевод"
+    receiver_name = format_receipt_recipient_title(op_data.get("title") or "Получатель")
+    if op_type == "Credit":
+        rp = (op_data.get("receipt_phone") or op_data.get("requisite_phone") or op_data.get("phone") or "").strip()
+    else:
+        rp = (op_data.get("requisite_phone") or op_data.get("phone") or "").strip()
+    receiver_phone = format_phone_for_receipt(rp) or "+7 000 000-00-00"
+
+    # Форматирование
+    int_amount = int(amount)
+    formatted_amount = f"{int_amount:,}".replace(",", " ")
+    formatted_account = format_receipt_debit_account_line(sender_account)
+    kvit = f"{random.randint(100,999)}-{random.randint(100,999)}-{random.randint(100,999)}"
+    bukva = random.choice(["А", "В"])
+    identificator = bukva + f"{random.randint(111111111111, 999999999999)}" + "406000004001" + f"{random.randint(11,99)}"
+    identificator2 = f"{random.randint(11111, 99999)}"
+
+    base = Path(__file__).resolve().parent
+    TEMPLATE_PATH = _resolve_receipt_template_path()
+    if not TEMPLATE_PATH:
+        print("[func] Нет шаблона чека (sbpfinaltbanksend.pdf / receipt_*.pdf)")
+        return None
+    FONT_NORMAL = str(base / "TinkoffSans-Regular.ttf")
+    FONT_BOLD = str(base / "TinkoffSans-Medium.ttf")
+    if not os.path.isfile(FONT_NORMAL):
+        FONT_NORMAL = "TinkoffSans-Regular.ttf"
+    if not os.path.isfile(FONT_BOLD):
+        FONT_BOLD = "TinkoffSans-Medium.ttf"
+
+    POSITIONS = {
+        "date": (20, 86.5),
+        "big_summ": (110, 92, 234.6, 142),
+        "summ": (110, 173.98, 242.05, 187.98),
+        "sender": (110, 214, 250, 228.18),
+        "number": (110, 239-5, 250.02, 253.08-5),
+        "name": (110, 239+20-5, 250.02, 253.08+20-5),
+        "bank": (110, 239+40-5, 250.02, 253.08+40-5),
+        "invoice": (110, 239+60-5, 250.02, 253.08+60-5),
+        "identificator": (124.98999786376953, 314.00299072265625+8.18),
+        "identificator2": (226.91000366210938, 325.0829772949219 + 8.18),
+        "kvit": (93.35900115966797, 450.9629821777344 + 8.18),
+        "commission": (110, 194, 250, 208),
+    }
+
+    doc = fitz.open(TEMPLATE_PATH)
+    page = doc[0]
+
+    def load_font(font_path, alias):
+        if os.path.exists(font_path):
+            page.insert_font(fontname=alias, fontfile=font_path)
+            return alias
+        return "helv"
+
+    font_n = load_font(FONT_NORMAL, "my_normal")
+    font_b = load_font(FONT_BOLD, "my_bold")
+
+    page.insert_text(POSITIONS["date"], date_str, fontname=font_n, fontsize=8, color=(144/255, 144/255, 144/255))
+    page.insert_textbox(POSITIONS["big_summ"], formatted_amount, fontname=font_b, fontsize=16, color=(51/255, 51/255, 51/255), align=TEXT_ALIGN_RIGHT)
+    page.insert_textbox(POSITIONS["summ"], formatted_amount, fontname=font_n, fontsize=9, color=(51/255, 51/255, 51/255), align=TEXT_ALIGN_RIGHT)
+    comm = POSITIONS["commission"]
+    page.draw_rect(fitz.Rect(comm[0], comm[1], comm[2], comm[3]), color=(1, 1, 1), fill=(1, 1, 1))
+    page.insert_textbox(comm, "0 ₽", fontname=font_n, fontsize=9, color=(51/255, 51/255, 51/255), align=TEXT_ALIGN_RIGHT)
+    page.insert_textbox(POSITIONS["sender"], display_sender, fontname=font_n, fontsize=9, color=(51/255, 51/255, 51/255), align=TEXT_ALIGN_RIGHT)
+    page.insert_textbox(POSITIONS["number"], receiver_phone, fontname=font_n, fontsize=9, color=(51/255, 51/255, 51/255), align=TEXT_ALIGN_RIGHT)
+    page.insert_textbox(POSITIONS["name"], receiver_name, fontname=font_n, fontsize=9, color=(51/255, 51/255, 51/255), align=TEXT_ALIGN_RIGHT)
+    page.insert_textbox(POSITIONS["bank"], bank, fontname=font_n, fontsize=9, color=(51/255, 51/255, 51/255), align=TEXT_ALIGN_RIGHT)
+    page.insert_textbox(POSITIONS["invoice"], formatted_account, fontname=font_n, fontsize=9, color=(51/255, 51/255, 51/255), align=TEXT_ALIGN_RIGHT)
+    page.insert_text(POSITIONS["identificator"], identificator, fontname=font_n, fontsize=9.008945, color=(51/255, 51/255, 51/255))
+    page.insert_text(POSITIONS["identificator2"], identificator2, fontname=font_n, fontsize=9.008945, color=(51/255, 51/255, 51/255))
+    page.insert_text(POSITIONS["kvit"], kvit, fontname=font_n, fontsize=9.008945, color=(51/255, 51/255, 51/255))
+
+    doc.save(output_path, clean=True, deflate=True, garbage=4, pretty=False)
+    doc.close()
+    
+    # Сжатие
+    final_path = output_path.replace(".pdf", "_final.pdf")
+    try:
+        compress_pdf_ghostscript(output_path, final_path)
+        return final_path
+    except Exception:
+        return output_path
+
+
+def _statement_font_path() -> Optional[str]:
+    wd = os.environ.get("WINDIR") or os.environ.get("SystemRoot") or r"C:\Windows"
+    for name in ("arial.ttf", "arialuni.ttf", "segoeui.ttf"):
+        p = os.path.join(wd, "Fonts", name)
+        if os.path.isfile(p):
+            return p
+    for p in ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"):
+        if os.path.isfile(p):
+            return p
+    return None
+
+
+def statement_sample_pdf_path() -> str:
+    """Путь к шаблону Выписка.pdf (лежит рядом с модулем)."""
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "Выписка.pdf")
+
+
+def generate_account_statement_pdf(movements, from_ms: int, to_ms: int, output_path: str, config: dict) -> str:
+    """
+    Выписка: страницы и вёрстка из файла Выписка.pdf, подставляются только наши данные и операции.
+    """
+    import statement_template_fill as stf
+
+    return stf.generate_statement_pdf_from_template(
+        list(movements or []),
+        int(from_ms),
+        int(to_ms),
+        output_path,
+        config or {},
+    )
+
+
